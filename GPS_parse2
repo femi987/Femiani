@@ -1,0 +1,136 @@
+#include "mcc_generated_files/mcc.h"
+//#include "stdlib.h"
+#include <string.h>
+
+/* Macros for enabling and disabling peripherals and external hardware*/
+#define U1_EN()         (U1CON0 = 0xB0)
+#define U1_DIS()        (U1CON0 = 0x80)
+#define U3_EN()         (U3CON0 = 0xB0)
+#define U3_DIS()        (U3CON0 = 0x80)
+#define GPS_Start()     do { LATAbits.LATA2 = 1; } while(0)
+#define GPS_Stop()      do { LATAbits.LATA2 = 0; } while(0)
+
+/* Volatile variables for use inside interrupt routines */
+volatile int Sw_f;          // Button interrupt flag
+volatile int GPS_f;         // UART interrupt flag
+
+uint8_t rxData1;
+uint8_t rxData2;
+char    *GLL = "$PMTK314,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*29\r\n";
+char    GPS_data[50];  // Array for raw GPS data
+char * lat;      // Array for parsed longitude
+char * lon;      // Array for parsed longitude
+char str[100];
+//const char * tokc = ',';
+//const char * tokp = '.';
+
+
+/* Variable for incrementing outside of for loops */
+int i = 0;
+int j = 0;
+int k = 0;
+int L = 0;
+
+void SW_1_Custom_ISR(void)
+{
+    for(int i=0; i<=3; i++)
+    {
+        LED_0_Toggle();     // Visible sign that interrupt worked
+        __delay_ms(200);
+    }
+    Sw_f = 1;               // Flag to enter if statement 1
+    IOCBFbits.IOCBF5 = 0;   // Clear IOC flag
+}
+void GPS_flag(void)
+{
+    UART3_Receive_ISR();    
+    GPS_f = 1;   
+    // Flag to enter if statement 2
+}
+
+void GPS_Read(void)
+{
+    while (UART3_Read() != 0x24);
+    while(!UART3_DataReady);// Wait for new line to come in over UART
+    for (int i=0; i<=50; i++)   //Read one line UART to GPS_data
+    {
+        GPS_data[i] = UART3_Read();
+    }
+    U3_DIS();               // Disable UART3 to prevent further interrupts
+ 
+
+    
+}
+
+
+void main(void){
+
+SYSTEM_Initialize();    // See following comment
+/*
+*      void SYSTEM_Initialize(void)
+       {
+           INTERRUPT_Initialize();
+           PMD_Initialize();
+           PIN_MANAGER_Initialize();
+           OSCILLATOR_Initialize();
+           UART1_Initialize();
+           UART3_Initialize();
+}*/
+GPS_Start();
+INTERRUPT_GlobalInterruptEnable();
+for (int i=0; i<=60; i++)
+{
+        UART3_Write(GLL[i]);
+}
+UART3_SetRxInterruptHandler(GPS_flag);
+IOCBF5_SetInterruptHandler(SW_1_Custom_ISR);
+
+/* UART interrupts interfere with IOC 
+ * UART disabled to prevent interrupt  */
+U1_DIS();   //  Disable UART1,3 to prevent interrupt
+U3_DIS();
+
+Sw_f = 0;
+GPS_f = 0;
+
+
+while (1){
+    
+    
+    /* Verify program running with 1Hz blinking LED*/
+    LED_0_Toggle();
+    __delay_ms(1000);
+    if (Sw_f == 1){     /* If statement #1: Enable UART*/
+        U3_EN();
+                  
+        Sw_f = 0;       // Reset flag
+    }
+    if (GPS_f == 1){    // If statement # 2: Read UART3, Parse, Write UART1
+        GPS_Read();     // Custom function, see top
+    U1_EN();    // Enable output to U1
+    U3RXB = 0;
+    U3TXB = 0;
+
+    lon = strtok(GPS_data, ",.\0");     // Start token
+    lon = strtok(NULL," ,.\0");         // Next token Longitude (hhmm)
+    strtok(NULL," ,.\0");               // Next token, decimal: not needed
+    strtok(NULL," ,.\0");               // Next token, 'N': not needed
+    lat = strtok(NULL," ,.\0");         // Next token, Latituded (hhhmm)
+    __delay_ms(10);
+    
+    sprintf(str, "%sN %sW", lon, lat);  // Copy to one string
+    printf(str);                        // Print string
+    printf("\r\n");           // Maybe add this too the end of string in sprintf
+
+/*_________________________________*/
+    while(!UART1_is_tx_done); 
+    //printf(" \r");
+    U1_DIS();   // Disable uart to prevent interrupts
+    GPS_f = 0;  //  Reset flag
+/*_________________________________*/        
+    }   
+
+
+
+}   // while(1)
+}   //void main
